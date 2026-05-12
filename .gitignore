@@ -1,0 +1,36 @@
+# Pikafish 引擎二进制与权重（体积大，按需手动下载）
+pikafish/
+pikafish*.zip
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 虚拟环境
+.venv/
+venv/
+env/
+.conda/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 系统
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 构建产物
+build/
+dist/
+*.egg-info/
+
+# 测试缓存
+.pytest_cache/
+.coverage
+htmlcov/
