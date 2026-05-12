@@ -1,130 +1,196 @@
-# 中国象棋（Pikafish AI 版）
+[English](README.md) | [中文](README.zh.md)
 
-基于 PySide6 + Pikafish 开源引擎的中国象棋桌面对战程序。架构上预留了 OpenCV 摄像头识别与机械臂落子的扩展接口，第一版先把"虚拟棋盘 + AI 对战"链路跑通。
+# robotchess
 
-## 项目结构
+> A Chinese chess (Xiangqi) desktop app that plays against the open-source **Pikafish** engine — designed from day one to be driven by a camera and a robotic arm, not just a mouse.
+
+![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
+![PySide6](https://img.shields.io/badge/PySide6-6.6+-41CD52?logo=qt&logoColor=white)
+![Pikafish](https://img.shields.io/badge/Engine-Pikafish-orange)
+![License](https://img.shields.io/badge/license-MIT-blue)
+
+---
+
+## Why this exists
+
+The end goal is a physical Xiangqi setup: a camera watches the board, a robotic arm moves the pieces, and the AI behind it has to be strong enough that beating it is actually rewarding. That last part rules out almost every hobbyist Xiangqi project — most ship with a hand-rolled minimax that an intermediate human beats in 5 minutes.
+
+**Pikafish** is the open-source Stockfish-equivalent for Chinese chess: NNUE-based, top-tier strength, free. Wiring it to a real GUI (and eventually to OpenCV + a robot arm) is the actual problem.
+
+This v1 ships the **virtual side** of that system. Real GUI, real Pikafish, real rules — but mouse input and screen output. The architecture leaves the camera and robot slots open: when v2 swaps the input source and v3 swaps the output executor, `core/`, `engine/`, and `ai/` will not change a single line.
+
+## What it is
+
+A PySide6 desktop application:
+
+- 9×10 board with full Xiangqi rules (palace, river, advisor diagonals, elephant eye, horse leg, cannon screen, flying general, self-check filtering, checkmate, stalemate)
+- Pikafish UCI subprocess managed transparently — startup, NNUE loading, `Skill Level` / `movetime` per difficulty, graceful shutdown
+- 4 difficulty tiers from "first-time learner" to "engine at full strength"
+- Two-click move interaction with last-move highlight, selection ring, hover preview, and check warnings
+- Async move-execution pipeline ready for a future robot arm — controller waits on `moveExecuted` signal regardless of whether the executor is a screen refresh or a 5-second physical motion
+
+## Key features
+
+- **Pikafish under the hood, not a toy minimax.** The AI is the real Pikafish binary speaking UCI on stdin/stdout. Difficulty maps to `Skill Level` 0/5/15/20 plus `movetime` 200/500/1500/3000 ms — at "Nightmare" it plays at engine strength, no nerfs.
+
+- **Rule layer that actually passes the standard tests.** Opening legal-move count for both sides = 44 (the canonical Xiangqi number). Flying general, self-check filtering, palace/river/eye constraints all unit-tested in `core/rule.py`.
+
+- **IO is abstract from day one.** `InputSource` and `MoveExecutor` are PySide6 `QObject`s with signals; `MouseInputSource` and `ScreenExecutor` are concrete v1 implementations; `CameraInputSource` and `RobotExecutor` are scaffolded files with the exact same interface, ready to be filled in for v2/v3 without touching the controller.
+
+- **Async move pipeline.** When the player or AI commits a move, the controller calls `executor.execute(move)` and waits for the `moveExecuted` signal before advancing turns. Screen v1 emits immediately; robot arm v3 emits only after the camera confirms the piece is physically in place. Same state machine, no rewrite.
+
+- **FEN-native board with diff support.** `Board.to_fen()` round-trips perfectly with Pikafish; `Board.diff(other)` returns per-cell changes — primitive that v2 will use to compare "what the camera sees" against "what we believe the board is."
+
+## With / Without
+
+|                       | Hand-rolled hobby project       | robotchess                                                 |
+| --------------------- | ------------------------------- | ---------------------------------------------------------- |
+| Engine                | Local minimax / heuristic       | Pikafish NNUE via UCI                                      |
+| Strength at top tier  | Beatable by intermediate human  | Engine-grade; same binary as serious analysis tools        |
+| Rule completeness     | Often missing flying general / self-check | Full rules, opening legal moves = 44 (verified)    |
+| Input model           | Hardcoded mouse                 | `InputSource` interface (mouse v1, camera v2 scaffolded)   |
+| Output model          | Hardcoded screen redraw         | `MoveExecutor` interface (screen v1, robot v3 scaffolded)  |
+| Move pipeline         | Synchronous                     | Async signal-driven, ready for physical actuation latency  |
+| Board representation  | Ad-hoc 2D array                 | FEN-native, with `diff()` for vision reconciliation        |
+
+## How it works
+
+### Three-layer architecture
 
 ```
-象棋/
-├── pikafish/                  # Pikafish 引擎二进制 + NNUE 权重（已就位）
-│   ├── pikafish-avx2.exe      # 默认使用的 CPU 变体
-│   ├── pikafish.nnue
-│   └── ...                    # 其他 CPU 变体可手动切换
-├── engine/                    # UCI 子进程封装层（IO 中性，不依赖 UI）
-│   └── pikafish.py
-├── core/                      # 棋盘数据 + FEN + 完整中国象棋规则
-├── ai/                        # BaseAI 抽象 + PikafishAI + 难度工厂
-├── ui/                        # PySide6 界面（双面板布局）
-├── input/                     # 走子来源抽象（鼠标实装，摄像头占位）
-├── output/                    # 走子执行抽象（屏幕实装，机械臂占位）
-├── tests/                     # 端到端烟雾测试
-├── main.py                    # 入口 + GameController 状态机
-├── config.py                  # 集中配置
-├── requirements.txt
-└── README.md
++------------------+   moveRequested(fr,fc,tr,tc)   +------------------+
+|   InputSource    | ------------------------------>|                  |
+|  mouse / camera  |                                |                  |
++------------------+                                | GameController   |
++------------------+   moveExecuted / moveFailed    |  (state machine) |
+|  MoveExecutor    | <------------------------------|                  |
+|  screen / robot  |                                +------------------+
++------------------+                                          |
+                                                              v
+                                              +-------------------------+
+                                              | core + engine + ai      |
+                                              | (no UI, no IO coupling) |
+                                              +-------------------------+
 ```
 
-详细架构与设计权衡见 plan 文件 `pikafish-groovy-spindle.md`（在 `~/.claude/plans/`）。
+The controller never touches `BoardPanel.set_cell` or `engine.go` directly. It only talks to abstract `InputSource` and `MoveExecutor`. Swapping mouse → camera or screen → robot is a constructor change in `main.py`, nothing else.
 
-## 环境准备
+### Engine integration
 
-使用独立 conda 环境，避免污染现有的 `OpenCV` / `PyQt6` 等环境。
+`engine/pikafish.py` is a thin synchronous UCI client (~250 lines). It launches `pikafish-avx2.exe` with `cwd` set to the binary's directory so the NNUE loads without absolute-path encoding issues on Windows Chinese paths. It parses the engine's `option` lines on startup, exposing `supports_option()` so the difficulty factory knows whether `Skill Level` is actually available before sending it.
+
+```python
+# Each AI turn, in a QThread to keep the UI responsive:
+fen = board.to_fen()
+uci = engine.go(fen, movetime_ms=1500)   # blocks until "bestmove ..."
+(fr, fc), (tr, tc) = parse_uci_move(uci) # "h2e2" -> ((7,7),(7,4))
+```
+
+The board's coordinate system was chosen to match UCI exactly — `row=0` is the black back rank (FEN's first row), `row=9` is the red back rank. Conversion is `uci_rank = 9 - row`. Picked this on purpose to avoid the most common Xiangqi-engine bug: silent vertical flips.
+
+### Why async execution, even on screen
+
+`ScreenExecutor.execute()` could just call `panel.update()` and return. Instead it queues the `moveExecuted` signal via `QTimer.singleShot(0, ...)`. The reason: `RobotExecutor` (v3) cannot be synchronous — the arm physically takes seconds to move. By forcing the v1 path to also be async, the controller's state machine is *already* what v3 needs. No "now make it async" refactor later.
+
+### Design decisions
+
+| Choice | Why |
+| --- | --- |
+| Bundled Pikafish binary, not python-chess | python-chess does not support Xiangqi. Subprocess UCI is the only path. |
+| Send full FEN every turn (not `position startpos moves ...`) | One source of truth. Cannot get out of sync if the controller and engine disagree on history. |
+| Integer-encoded board cells (`±1..±7`) | `sign` gives color, `abs` gives type. No dict lookups in the rule hot path. |
+| `Board.diff()` shipped in v1 | v2 (camera) needs it to reconcile vision results against believed state. Cheaper to write now than retrofit. |
+| Difficulty switch without engine restart | Each `PikafishAI` writes its own `Skill Level` via `setoption` before each `go`. Engine instance is a singleton. |
+
+## Quick start
+
+**Prerequisites**
+- Windows 10/11 (other OS work but `pikafish-avx2.exe` is Windows; download the matching binary from [Pikafish releases](https://github.com/official-pikafish/Pikafish/releases))
+- Python 3.11+ (Anaconda/Miniconda recommended)
 
 ```powershell
-# 1. 创建环境（Python 3.11）
+# 1. Clone
+git clone https://github.com/<your-name>/robotchess.git
+cd robotchess
+
+# 2. Drop Pikafish binaries into pikafish/
+#    The folder must contain pikafish-avx2.exe + pikafish.nnue (or another variant)
+#    Get them from https://github.com/official-pikafish/Pikafish/releases
+
+# 3. Create env and install deps
 conda create -n xiangqi python=3.11 -y
-
-# 2. 激活
 conda activate xiangqi
-
-# 3. 安装依赖
 pip install -r requirements.txt
-```
 
-环境一旦建好，之后每次开发只需 `conda activate xiangqi`。
-
-## 运行
-
-```powershell
-conda activate xiangqi
-cd D:/Project/Python/图像处理课程设计/象棋
+# 4. Run
 python main.py
 ```
 
-启动后默认玩家执红、普通难度。点击己方棋子选中（蓝圈高亮），再点目标点完成走子；起点终点会出现红框标识最后一手。
+A "Pikafish 引擎" titled window opens. You play Red by default; click any red piece to select, click destination to move. The status bar shows whose turn, current difficulty, and check warnings.
 
-## 引擎自测
-
-不进 GUI 也可以独立验证引擎能否启动、坐标方向是否正确：
+### Verify the engine without launching the GUI
 
 ```powershell
-conda activate xiangqi
-cd D:/Project/Python/图像处理课程设计/象棋
 python -m engine.pikafish
 ```
 
-正常输出（最关键的几行）：
+Expected output ends with `[smoke] bestmove: b2e2` — that's Pikafish playing 炮二平五 (cannon to center) as opening, confirming UCI handshake + coordinate system both work.
 
-```
-[smoke] options (20): ['Clear Hash', ..., 'Skill Level', 'Threads', 'UCI_Elo', 'UCI_LimitStrength', ...]
-[smoke] bestmove: b2e2
-[smoke] 通信与走法格式校验通过
-```
-
-- `b2e2` = 红方开局炮二平五，是 Pikafish 在 500ms 思考下的标准开局之一
-- 看到 `bestmove` 列字母在 `a..i`、行数字在 `0..9` 即视为通信链路打通
-- 输出里中文如果乱码是 Windows 终端 GBK 解 UTF-8 的问题，不影响程序逻辑；要看清楚的话用 `chcp 65001` 切到 UTF-8 终端
-
-## 端到端测试
+### End-to-end smoke test
 
 ```powershell
 python tests/test_end_to_end.py
 ```
 
-会自动启动 GUI → 模拟玩家走马二进三 → 等 AI 回应 → 校验合法性 → 退出，全程 < 1 秒。
+Launches the full GUI, simulates a player move (马二进三), waits for AI reply, validates legality, exits. Total runtime ~1 second.
 
-## 难度档位
+## Roadmap
 
-| 档位 | movetime | Skill Level | 说明                |
-| ---- | -------- | ----------- | ------------------- |
-| 简单 | 200 ms   | 0           | 给新手练手          |
-| 普通 | 500 ms   | 5           | 日常对弈            |
-| 困难 | 1500 ms  | 15          | 中级棋手挑战        |
-| 噩梦 | 3000 ms  | 20          | 接近引擎全力        |
+- **v2 — Camera input.** Implement `input/camera_input.py`: OpenCV `VideoCapture` + a board recognizer. Frame stream → 9×10 piece matrix → `Board.diff()` against believed state → emit `moveRequested`. The left `ImagePanel` shows the live feed with recognition overlay.
+- **v3 — Robot arm output.** Implement `output/robot_output.py`: `(row, col)` → physical coordinates → arm command → wait for completion → camera reconfirm → emit `moveExecuted` (or `moveFailed` if the piece didn't land).
+- **Game record / replay.** `Board.move_history` already collects every move; just needs PGN-style serialization.
 
-Pikafish 启动时实测支持 `Skill Level` / `UCI_LimitStrength` / `UCI_Elo` 等弱化选项。
-
-## 当前进度
-
-- [x] 项目骨架（config.py / requirements.txt / 目录结构）
-- [x] `engine/pikafish.py` UCI 通信封装 + 烟雾测试通过
-- [x] `core/` 棋盘数据 + FEN + Board.diff（为 OpenCV 预留）
-- [x] `core/rule.py` 完整走法规则（开局合法走法 44 / 飞将 / 自将过滤 / 将死）
-- [x] `ai/` 三件套（BaseAI + PikafishAI + 难度工厂）
-- [x] `input/output/` 抽象层 + camera/robot 占位骨架
-- [x] `ui/` 五件套（main_window / image_panel / board_panel / settings_dialog / status_bar / ai_worker）
-- [x] `main.py` 控制器（异步走子链 + 将军/将死/困毙提示 + 重开/设置）
-- [x] 端到端烟雾测试（`tests/test_end_to_end.py`）
-- [x] 手测：红黑互走、难度切换、被将军提示、重开
-
-## 未来扩展（第二/三版）
-
-- **OpenCV 识别**：实现 `input/camera_input.py`，左侧 `ImagePanel` 显示摄像头画面；`core/engine/ai/ui` 完全不动
-- **机械臂落子**：实现 `output/robot_output.py`，发出物理走子指令并等摄像头确认到位；controller 已经按异步执行链设计，零改动
-- **棋谱保存 / 复盘**：`Board` 已天然维护走子历史，按需追加序列化即可
-
-## 切换 CPU 变体
-
-`pikafish/` 目录下提供多个变体（`avx2` / `avx512` / `vnni512` / `bmi2` 等）。如果想换更强的变体，改 `config.py` 里的 `PIKAFISH_EXE` 即可：
-
-```python
-PIKAFISH_EXE = "pikafish-vnni512.exe"
-```
-
-性能优先级（来自 `pikafish/引擎介绍.txt`）：
+## Project layout
 
 ```
-vnni512 > bw512 > avx512 > avxvnni > bmi2 > avx2 > sse41-popcnt
+robotchess/
+├── pikafish/             # ← drop binaries here (gitignored)
+├── engine/pikafish.py    # UCI subprocess wrapper
+├── core/
+│   ├── board.py          # 10×9 board, FEN, move history, diff()
+│   ├── constants.py      # piece encoding, palace/river bounds
+│   ├── pieces.py         # FEN ↔ integer ↔ Chinese character maps
+│   └── rule.py           # legal moves, check, mate, stalemate
+├── ai/
+│   ├── base_ai.py        # BaseAI interface
+│   ├── pikafish_ai.py    # Pikafish adapter + UCI move parser
+│   └── factory.py        # difficulty → (movetime, skill_level)
+├── input/
+│   ├── base_input.py     # InputSource ABC (Qt signals)
+│   ├── mouse_input.py    # v1: BoardPanel clicks
+│   └── camera_input.py   # v2 scaffold
+├── output/
+│   ├── base_output.py    # MoveExecutor ABC
+│   ├── screen_output.py  # v1: panel refresh
+│   └── robot_output.py   # v3 scaffold
+├── ui/
+│   ├── main_window.py    # QSplitter layout
+│   ├── image_panel.py    # left: camera feed (placeholder in v1)
+│   ├── board_panel.py    # right: 9×10 board + two-click interaction
+│   ├── settings_dialog.py
+│   ├── status_bar.py
+│   └── ai_worker.py      # QThread for engine.go()
+├── tests/test_end_to_end.py
+├── main.py               # GameController state machine
+├── config.py
+└── requirements.txt
 ```
 
-默认 `avx2` 兼容性最好。
+## License
+
+MIT. Pikafish is GPLv3 — its binaries are not redistributed in this repo; download them yourself from the [official release page](https://github.com/official-pikafish/Pikafish/releases).
+
+## Acknowledgments
+
+- [Pikafish](https://github.com/official-pikafish/Pikafish) — the engine that makes this project worth building.
+- [Stockfish](https://github.com/official-stockfish/Stockfish) — Pikafish's upstream lineage and the reason its UCI flow is so well-trodden.
