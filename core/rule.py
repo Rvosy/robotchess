@@ -190,19 +190,59 @@ def kings_facing(board: Board) -> bool:
 
 def is_in_check(board: Board, color: int) -> bool:
     """color 方当前是否被将军（含飞将）。"""
+    return len(find_checkers(board, color)) > 0
+
+
+def find_checkers(board: Board, color: int) -> list[tuple[int, int]]:
+    """返回所有正在将军 color 方将/帅的对方棋子坐标。
+
+    飞将也视为由对方将/帅造成将军，返回对方将/帅坐标。
+    """
     king = board.find_king(color)
     if king is None:
-        return False
+        return []
+
+    checkers: list[tuple[int, int]] = []
     if kings_facing(board):
-        return True
+        enemy_king = board.find_king(BLACK if color == RED else RED)
+        if enemy_king is not None:
+            checkers.append(enemy_king)
+
     for r in range(BOARD_ROWS):
         for c in range(BOARD_COLS):
             p = board.cells[r][c]
             if p == EMPTY or piece_color(p) == color:
                 continue
             if is_pseudo_legal(board, (r, c), king):
-                return True
-    return False
+                checkers.append((r, c))
+    return checkers
+
+
+def find_checkers_after_move(
+    board: Board,
+    color: int,
+    from_rc: tuple[int, int],
+    to_rc: tuple[int, int],
+) -> list[tuple[int, int]]:
+    """试走一步后，返回 color 方仍被哪些棋子将军。
+
+    仅用于 UI 提示应将失败原因；函数会原样回滚棋盘，不污染走子历史。
+    伪非法走法没有明确的"试走后局面"，返回空列表。
+    """
+    if not is_pseudo_legal(board, from_rc, to_rc):
+        return []
+
+    fr, fc = from_rc
+    tr, tc = to_rc
+    saved_from = board.cells[fr][fc]
+    saved_to = board.cells[tr][tc]
+    board.cells[tr][tc] = saved_from
+    board.cells[fr][fc] = EMPTY
+    try:
+        return find_checkers(board, color)
+    finally:
+        board.cells[fr][fc] = saved_from
+        board.cells[tr][tc] = saved_to
 
 
 def is_legal_move(board: Board, from_rc: tuple[int, int], to_rc: tuple[int, int]) -> bool:
@@ -350,6 +390,7 @@ def _self_test() -> None:
     b10 = Board.from_fen("4k4/9/9/9/9/9/9/9/4r4/4K4 w - - 0 1")
     # 此时黑车在 (8,4) 直接将军红帅 (9,4)
     assert is_in_check(b10, RED), "此局面红方应被将军"
+    assert find_checkers(b10, RED) == [(8, 4)], "应定位到黑车正在将军"
     # 红帅走 (9,3) 是否逃将？(9,3)→ 黑车沿列攻击 col 4，不到 col 3，安全
     assert is_legal_move(b10, (9, 4), (9, 3)), "红帅横向躲将合法"
     # 红帅 (9,4) → (9,5) 也能躲
@@ -370,7 +411,17 @@ def _self_test() -> None:
     #   (8,3)(8,5) 不属于帅的走法（帅只走一格正交）
     # 没别的子能挡能吃
     assert is_checkmate(b12, RED), "该局面红方应被将死"
+    assert find_checkers(b12, RED) == [(7, 4), (9, 0)], "双将时应返回全部将军来源"
+    before_fen = b12.to_fen()
+    assert find_checkers_after_move(b12, RED, (9, 4), (8, 4)) == [(7, 4)], "试走后应定位新的将军来源"
+    assert b12.to_fen() == before_fen, "试走定位将军来源后必须回滚棋盘"
     print("[ok] 将死判定正确")
+
+    # 11. 飞将来源定位：两王同列无子，互相造成将军
+    b13 = Board.from_fen("4k4/9/9/9/9/9/9/9/9/4K4 w - - 0 1")
+    assert find_checkers(b13, RED) == [(0, 4)], "飞将时红方应被黑将将军"
+    assert find_checkers(b13, BLACK) == [(9, 4)], "飞将时黑方应被红帅将军"
+    print("[ok] 将军来源定位正确")
 
     print("core/rule.py 自测全部通过")
 

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import QPoint, QRect, Qt, Signal
+from PySide6.QtCore import QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -55,6 +55,13 @@ class BoardPanel(QWidget):
         self._input_enabled: bool = True
         self._selected: Optional[tuple[int, int]] = None  # 已选中的己方棋子
         self._hover_cell: Optional[tuple[int, int]] = None
+        self._check_alert_cells: list[tuple[int, int]] = []
+        self._check_alert_text: Optional[str] = None
+        self._check_flash_visible = False
+        self._check_flash_remaining = 0
+        self._check_alert_timer = QTimer(self)
+        self._check_alert_timer.setInterval(160)
+        self._check_alert_timer.timeout.connect(self._advance_check_alert)
 
     # ---------- 对外接口 ----------
 
@@ -63,6 +70,7 @@ class BoardPanel(QWidget):
         self.board = board
         self._selected = None
         self._hover_cell = None
+        self.clear_check_alert(update=False)
         self.update()
 
     def set_input_enabled(self, enabled: bool) -> None:
@@ -81,6 +89,35 @@ class BoardPanel(QWidget):
 
     def clear_selection(self) -> None:
         self._selected = None
+        self.update()
+
+    def show_check_alert(self, cells: list[tuple[int, int]], text: str = "将军！") -> None:
+        """在棋盘上短暂显示将军提示，并闪烁造成将军的棋子。"""
+        self._check_alert_timer.stop()
+        self._check_alert_cells = list(cells)
+        self._check_alert_text = text
+        self._check_flash_visible = True
+        self._check_flash_remaining = 6
+        self.update()
+        self._check_alert_timer.start()
+
+    def clear_check_alert(self, update: bool = True) -> None:
+        """清除当前将军提示动画。"""
+        self._check_alert_timer.stop()
+        self._check_alert_cells = []
+        self._check_alert_text = None
+        self._check_flash_visible = False
+        self._check_flash_remaining = 0
+        if update:
+            self.update()
+
+    def _advance_check_alert(self) -> None:
+        """推进将军提示闪烁动画。"""
+        if self._check_flash_remaining <= 1:
+            self.clear_check_alert()
+            return
+        self._check_flash_remaining -= 1
+        self._check_flash_visible = not self._check_flash_visible
         self.update()
 
     # ---------- 几何 / 坐标转换 ----------
@@ -144,6 +181,7 @@ class BoardPanel(QWidget):
         self._draw_pieces(p, cell, mx, my)
         self._draw_selection(p, cell, mx, my)
         self._draw_hover(p, cell, mx, my)
+        self._draw_check_alert(p, cell, mx, my)
 
     def _draw_grid(self, p: QPainter, cell: float, mx: float, my: float) -> None:
         """横线 10 条贯通；竖线 9 条但中间 7 条在河界处断开。"""
@@ -291,6 +329,46 @@ class BoardPanel(QWidget):
         p.setBrush(QColor(*config.COLOR_HOVER_MARK))
         radius = cell * 0.40
         p.drawEllipse(QPoint(int(cx), int(cy)), int(radius), int(radius))
+
+    def _draw_check_alert(self, p: QPainter, cell: float, mx: float, my: float) -> None:
+        """绘制棋盘内将军文字与造成将军棋子的闪烁框。"""
+        if self._check_alert_text is None:
+            return
+
+        if self._check_flash_visible:
+            pen = QPen(QColor(230, 30, 30))
+            pen.setWidthF(max(3.0, cell * 0.08))
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            side = cell * 0.96
+            for r, c in self._check_alert_cells:
+                cx = mx + c * cell
+                cy = my + r * cell
+                p.drawRect(QRect(int(cx - side / 2), int(cy - side / 2), int(side), int(side)))
+
+        font = QFont()
+        font.setPointSizeF(max(22.0, cell * 0.62))
+        font.setBold(True)
+        p.setFont(font)
+
+        text_w = cell * 3.2
+        text_h = cell * 1.1
+        x = (self.width() - text_w) / 2
+        y = (self.height() - text_h) / 2
+        text_rect = QRect(int(x), int(y), int(text_w), int(text_h))
+
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(255, 245, 220, 215))
+        p.drawRoundedRect(text_rect, int(cell * 0.12), int(cell * 0.12))
+
+        pen = QPen(QColor(210, 20, 20))
+        pen.setWidthF(max(1.5, cell * 0.03))
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(text_rect, int(cell * 0.12), int(cell * 0.12))
+
+        p.setPen(QColor(180, 0, 0))
+        p.drawText(text_rect, Qt.AlignCenter, self._check_alert_text)
 
     # ---------- 鼠标交互 ----------
 

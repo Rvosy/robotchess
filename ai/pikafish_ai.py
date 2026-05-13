@@ -54,10 +54,14 @@ class PikafishAI(BaseAI):
         engine: PikafishEngine,
         movetime_ms: int,
         skill_level: int | None = None,
+        limit_strength: bool = False,
+        uci_elo: int | None = None,
     ) -> None:
         self.engine = engine
         self.movetime_ms = movetime_ms
         self.skill_level = skill_level
+        self.limit_strength = limit_strength
+        self.uci_elo = uci_elo
 
     def get_move(
         self, board: Board, color: int
@@ -65,6 +69,10 @@ class PikafishAI(BaseAI):
         # 每次 get_move 前同步 Skill Level，难度切换无需重启引擎
         if self.skill_level is not None and self.engine.supports_option("Skill Level"):
             self.engine.set_option("Skill Level", str(self.skill_level))
+        if self.engine.supports_option("UCI_LimitStrength"):
+            self.engine.set_option("UCI_LimitStrength", "true" if self.limit_strength else "false")
+        if self.limit_strength and self.uci_elo is not None and self.engine.supports_option("UCI_Elo"):
+            self.engine.set_option("UCI_Elo", str(self.uci_elo))
 
         fen = board.to_fen()
         try:

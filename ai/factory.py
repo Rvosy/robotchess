@@ -25,12 +25,32 @@ DIFFICULTY_LABEL = {
 }
 
 
-# Pikafish Skill Level 范围 0..20（参考 Stockfish 同名选项）
-DIFFICULTY_PRESETS: dict[str, dict[str, int]] = {
-    DIFFICULTY_EASY:      {"movetime_ms": 200,  "skill_level": 0},
-    DIFFICULTY_NORMAL:    {"movetime_ms": 500,  "skill_level": 5},
-    DIFFICULTY_HARD:      {"movetime_ms": 1500, "skill_level": 15},
-    DIFFICULTY_NIGHTMARE: {"movetime_ms": 3000, "skill_level": 20},
+# Pikafish Skill Level 范围 0..20。简单档额外启用 UCI 限强，避免最低 Skill 仍过强。
+DIFFICULTY_PRESETS: dict[str, dict[str, int | bool | None]] = {
+    DIFFICULTY_EASY: {
+        "movetime_ms": 80,
+        "skill_level": 0,
+        "limit_strength": True,
+        "uci_elo": 1320,
+    },
+    DIFFICULTY_NORMAL: {
+        "movetime_ms": 500,
+        "skill_level": 5,
+        "limit_strength": False,
+        "uci_elo": None,
+    },
+    DIFFICULTY_HARD: {
+        "movetime_ms": 1500,
+        "skill_level": 15,
+        "limit_strength": False,
+        "uci_elo": None,
+    },
+    DIFFICULTY_NIGHTMARE: {
+        "movetime_ms": 3000,
+        "skill_level": 20,
+        "limit_strength": False,
+        "uci_elo": None,
+    },
 }
 
 
@@ -39,6 +59,8 @@ def build_ai(difficulty: str, engine: PikafishEngine) -> BaseAI:
     preset = DIFFICULTY_PRESETS.get(difficulty, DIFFICULTY_PRESETS[DIFFICULTY_NORMAL])
     return PikafishAI(
         engine=engine,
-        movetime_ms=preset["movetime_ms"],
-        skill_level=preset["skill_level"],
+        movetime_ms=int(preset["movetime_ms"]),
+        skill_level=int(preset["skill_level"]) if preset["skill_level"] is not None else None,
+        limit_strength=bool(preset["limit_strength"]),
+        uci_elo=int(preset["uci_elo"]) if preset["uci_elo"] is not None else None,
     )

@@ -35,7 +35,7 @@ from ai.factory import (
 )
 from core.board import Board
 from core.constants import BLACK, RED, opponent
-from core.rule import is_game_over, is_in_check, is_legal_move
+from core.rule import find_checkers, find_checkers_after_move, is_game_over, is_in_check, is_legal_move
 from engine.pikafish import PikafishEngine, PikafishError
 from input.mouse_input import MouseInputSource
 from output.screen_output import ScreenExecutor
@@ -120,6 +120,8 @@ class GameController:
                 msg = f"{_color_name(self.ai_color)}方无子可走（困毙），{_color_name(self.human_color)}方（你）获胜"
             self._end_game(msg)
             return
+        if is_in_check(self.board, self.ai_color):
+            self.window.board_panel.show_check_alert(find_checkers(self.board, self.ai_color))
         self._start_ai_turn()
 
     # ---------- AI 分支 ----------
@@ -164,13 +166,8 @@ class GameController:
         self.input_source.set_enabled(True)
         self.input_source.set_player_color(self.human_color)
         self._set_human_turn_status()
-        # 若被将军（但仍有应将走法）→ 弹窗提示，避免玩家以为程序卡住
         if is_in_check(self.board, self.human_color):
-            QMessageBox.warning(
-                self.window,
-                "将军！",
-                f"AI 将了你一军，必须应将（避将 / 垫将 / 吃将军子）。",
-            )
+            self.window.board_panel.show_check_alert(find_checkers(self.board, self.human_color))
 
     def on_ai_failed(self, msg: str) -> None:
         QMessageBox.critical(self.window, "引擎错误", f"Pikafish 返回错误：\n{msg}")
@@ -205,6 +202,14 @@ class GameController:
         """玩家试图走非法走法（含"走完仍被将军"）。在状态栏短暂提示原因。"""
         # 真正原因可能多种；最常见是被将军时不应将。直接拼提示，避免误导。
         if is_in_check(self.board, self.human_color):
+            checkers = find_checkers_after_move(
+                self.board,
+                self.human_color,
+                (fr, fc),
+                (tr, tc),
+            )
+            if checkers:
+                self.window.board_panel.show_check_alert(checkers)
             self.window.set_status(
                 f"{_color_name(self.human_color)}方被将军！该走法不能解除将军，请重新选择"
             )
